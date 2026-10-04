@@ -129,6 +129,9 @@ impl OverlayBuilder {
         let result = (|| {
             let targets = crate::hooks::dxgi::discover(self.dx11, self.dx12)?;
             input::configure(self.blocking, self.toggle_key);
+            if let Some(vk) = self.toggle_key {
+                crate::hotkey::start(vk);
+            }
             VISIBLE.store(self.visible, Ordering::Release);
             *STATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(RenderThreadOnly(State {
                 factory: Some(factory),
@@ -152,6 +155,7 @@ impl OverlayBuilder {
         })();
         if let Err(e) = &result {
             log::error!("overhook: install failed: {e}");
+            crate::hotkey::stop();
             crate::hooks::unhook_all();
             *STATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
             INSTALLED.store(false, Ordering::Release);
@@ -246,6 +250,7 @@ pub fn eject() {
     if !INSTALLED.load(Ordering::Acquire) {
         return;
     }
+    crate::hotkey::stop();
     set_visible(false);
     crate::hooks::unhook_all();
     input::detach();
@@ -300,8 +305,9 @@ fn present_inner(raw: *mut c_void) {
         st.swap_chain = raw as usize;
         st.renderer = None;
         st.renderer_failed = false;
-        if let Ok(desc) = unsafe { swap_chain.GetDesc() } {
-            st.hwnd = desc.OutputWindow;
+        st.hwnd = swap_chain_window(swap_chain);
+        if st.hwnd.0.is_null() {
+            log::warn!("overhook: could not find the game window; mouse/keyboard input disabled");
         }
     }
     st.last_present = Instant::now();
@@ -409,6 +415,37 @@ pub(crate) fn on_resize(raw: *mut c_void) {
     }));
     if r.is_err() {
         log::error!("overhook: panic in ResizeBuffers hook");
+    }
+}
+
+/// The window a swap chain presents to.
+///
+/// `OutputWindow` is null for swap chains created with
+/// `CreateSwapChainForCoreWindow` (UWP games such as Minecraft Bedrock), so
+/// fall back to `IDXGISwapChain1::GetHwnd` and then to the CoreWindow's HWND.
+fn swap_chain_window(swap_chain: &IDXGISwapChain) -> HWND {
+    use windows::Win32::Graphics::Dxgi::IDXGISwapChain1;
+    use windows::Win32::System::WinRT::ICoreWindowInterop;
+
+    if let Ok(desc) = unsafe { swap_chain.GetDesc() }
+        && !desc.OutputWindow.0.is_null()
+    {
+        return desc.OutputWindow;
+    }
+    let Ok(sc1) = swap_chain.cast::<IDXGISwapChain1>() else {
+        return HWND::default();
+    };
+    if let Ok(hwnd) = unsafe { sc1.GetHwnd() }
+        && !hwnd.0.is_null()
+    {
+        return hwnd;
+    }
+    match unsafe { sc1.GetCoreWindow::<ICoreWindowInterop>() }.and_then(|w| unsafe { w.WindowHandle() }) {
+        Ok(hwnd) => {
+            log::debug!("overhook: using CoreWindow {:?}", hwnd.0);
+            hwnd
+        }
+        Err(_) => HWND::default(),
     }
 }
 

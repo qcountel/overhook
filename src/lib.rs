@@ -51,6 +51,7 @@ pub mod clipboard;
 pub mod draw;
 mod error;
 mod hooks;
+mod hotkey;
 pub mod input;
 mod overlay;
 mod renderer;

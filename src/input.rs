@@ -294,9 +294,8 @@ fn handle(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Action {
             let repeat = down && (lparam.0 >> 30) & 1 == 1;
             let toggle = TOGGLE_KEY.load(Ordering::Relaxed);
             if toggle != 0 && vk == toggle {
-                if down && !repeat {
-                    crate::overlay::toggle();
-                }
+                // toggling itself is done by the hotkey poller (works even
+                // when the game never sends WM_KEYDOWN); just hide the key
                 return Action::Swallow(0);
             }
             push(InputEvent::Key { vk, down, repeat });

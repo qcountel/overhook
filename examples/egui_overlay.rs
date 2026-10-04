@@ -34,6 +34,11 @@ impl overhook::backends::egui::EguiApp for Menu {
             }
             ui.label(format!("clicked {} times", self.clicks));
         });
+        // the close button hides the whole overlay; INSERT brings it back
+        if !self.open {
+            self.open = true;
+            overhook::set_visible(false);
+        }
     }
 }
 
