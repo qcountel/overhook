@@ -27,7 +27,7 @@
 //!                                         │                      │
 //!                                         │               DrawData (API-agnostic meshes + textures)
 //!                                         ▼                      ▼
-//!                                  WndProc input ◄──── Renderer (DX11 / DX12, auto-detected)
+//!                     LL hooks / raw input ◄──── Renderer (DX11 / DX12, auto-detected)
 //! ```
 //!
 //! * The graphics API is detected from the swap chain's device, the user does
@@ -51,7 +51,6 @@ pub mod clipboard;
 pub mod draw;
 mod error;
 mod hooks;
-mod hotkey;
 pub mod input;
 mod overlay;
 mod renderer;

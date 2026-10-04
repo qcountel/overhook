@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 /// Targets of every hook installed by us.
 static TARGETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
-/// Threads currently inside one of our detours / the WndProc.
+/// Threads currently inside one of our detours.
 static INFLIGHT: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) struct InFlight;

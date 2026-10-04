@@ -42,11 +42,12 @@ Build as a `cdylib`, inject the DLL with any injector, and press **INSERT**.
   - DX11: the full pipeline state is saved before drawing and restored afterwards.
   - DX12: the overlay records its own command list, and allocators and buffers live per back buffer behind fences.
 - **sRGB and HDR (FP16) back buffers** get correctly converted colours.
-- **Input**: the WndProc is subclassed.
-  - Mouse, keyboard, wheel and text are delivered, including UTF-16 surrogate pairs.
-  - Clipboard works for both backends.
-  - Blocking modes: `Never`, `WhenWanted` (the UI's capture flags) or `WhenVisible`.
-  - Key-ups always reach the game, so no key ever gets stuck.
+- **Input** works in Win32 *and* UWP games (Minecraft Bedrock). No window procedure is patched.
+  - Low-level mouse/keyboard hooks on a dedicated thread; raw mouse input moves a virtual cursor even when the game captures the system one.
+  - UWP keyboard is read through `CoreWindow::GetAsyncKeyState` on the game's UI thread; polling fallbacks cover hooks that are never called.
+  - Mouse, keyboard, wheel and layout-aware text (Cyrillic etc.) are delivered. Clipboard works for both backends.
+  - Blocking modes: `WhenVisible` (default, modal menu: game gets nothing, system cursor hidden, UI draws its own), `WhenWanted` (only what the UI asks for) or `Never`.
+  - Key-ups always reach the game, held keys are released when the menu opens, Alt/Win combos always pass.
 - **Robust**:
   - Every detour runs under `catch_unwind`, and Present re-entrancy is guarded.
   - If the device or swap chain changes, the renderer is re-created and every texture is re-uploaded from a CPU mirror.
@@ -79,8 +80,8 @@ Overlay::builder()
     .egui(app)                       // or .imgui(app) or .backend(|| MyBackend::new())
     .toggle_key(vk::INSERT)          // optional show/hide key (never reaches the game)
     .visible(true)                   // initial visibility
-    .input_blocking(InputBlocking::WhenWanted)
-    .software_cursor(true)           // draw a cursor for games that hide the OS one
+    .input_blocking(InputBlocking::WhenVisible) // default: modal menu
+    .software_cursor(true)           // draw a cursor (always on in WhenVisible)
     .graphics(true, true)            // restrict to DX11 / DX12
     .install()?;                     // never from DllMain: use overhook::entry!
 
@@ -99,7 +100,7 @@ pass a closure. See [`examples/`](examples).
 
 ```text
             on_input(InputEvent)          frame(&FrameInfo, &mut DrawData)        capture()
- WndProc ───────────────────────► Backend ─────────────────────────────► Renderer   ───► input blocking
+   input ───────────────────────► Backend ─────────────────────────────► Renderer   ───► input blocking
 ```
 
 ```rust
@@ -138,7 +139,8 @@ They only ever see `DrawData`, so a new API, such as Vulkan or OpenGL behind the
 - Overlays such as Steam, Discord and RTSS that hook `Present` themselves usually coexist, because MinHook chains detours.
 - If a game uses several swap chains, the overlay draws on the one that presents. It switches only after the current one has been silent for 500 ms.
 - DX12 games that present from a queue that DXGI does not report, and that never submit a DIRECT queue, cannot be drawn on.
-- Raw-input-only cameras ignore WndProc blocking unless you use `InputBlocking::WhenVisible`, which also drops `WM_INPUT`.
+- `WhenVisible` redirects the process' raw mouse input to overhook while the menu is open and restores the game's registration on close/eject.
+- If a UWP game presents from a thread that does not own its `CoreWindow`, call `overhook::input::poll_core_keys()` from a hook on the game's UI thread.
 - UWP games (e.g. Minecraft Bedrock) need the DLL to be readable by `ALL APPLICATION PACKAGES` before injection.
 
 ## Roadmap
@@ -192,11 +194,12 @@ overhook::entry!(|_module| {
   - DX11: всё состояние конвейера сохраняется перед отрисовкой и восстанавливается после.
   - DX12: оверлей записывает собственный список команд, а аллокаторы и буферы заведены на каждый буфер кадра и синхронизированы через fence.
 - На **sRGB- и HDR-буферах (FP16)** цвета пересчитываются правильно.
-- **Ввод**: подменяется оконная процедура игры (WndProc).
-  - Передаются мышь, клавиатура, колесо и текст, включая суррогатные пары UTF-16.
-  - Буфер обмена работает в обоих бэкендах.
-  - Режимы блокировки: `Never`, `WhenWanted` (по запросу UI) или `WhenVisible`.
-  - Отпускание клавиш всегда доходит до игры, поэтому клавиши не залипают.
+- **Ввод** работает и в Win32-, и в UWP-играх (Minecraft Bedrock). Оконная процедура игры не подменяется.
+  - Низкоуровневые хуки мыши и клавиатуры в отдельном потоке; raw input двигает виртуальный курсор, даже когда игра захватила системный.
+  - Клавиатура в UWP читается через `CoreWindow::GetAsyncKeyState` в UI-потоке игры; если хуки не вызываются, работает опрос.
+  - Передаются мышь, клавиатура, колесо и текст с учётом раскладки (кириллица и т. д.). Буфер обмена работает в обоих бэкендах.
+  - Режимы блокировки: `WhenVisible` (по умолчанию, модальное меню: игра ничего не получает, системный курсор скрыт, UI рисует свой), `WhenWanted` (только то, что просит UI) или `Never`.
+  - Отпускание клавиш всегда доходит до игры, зажатые клавиши отпускаются при открытии меню, сочетания с Alt/Win проходят всегда.
 - **Надёжность**:
   - каждый перехватчик выполняется под `catch_unwind`, повторный вход в Present исключён;
   - если сменилось устройство или swap chain, рендерер создаётся заново, а все текстуры перезаливаются из копии в памяти;
@@ -229,8 +232,8 @@ Overlay::builder()
     .egui(app)                       // или .imgui(app), или .backend(|| MyBackend::new())
     .toggle_key(vk::INSERT)          // клавиша показа/скрытия (до игры не доходит)
     .visible(true)                   // видимость сразу после установки
-    .input_blocking(InputBlocking::WhenWanted)
-    .software_cursor(true)           // свой курсор для игр, которые прячут системный
+    .input_blocking(InputBlocking::WhenVisible) // по умолчанию: модальное меню
+    .software_cursor(true)           // свой курсор (в WhenVisible включён всегда)
     .graphics(true, true)            // ограничить DX11 / DX12
     .install()?;                     // не из DllMain: используйте overhook::entry!
 
@@ -249,7 +252,7 @@ overhook::util::eject_and_unload(module); // eject + FreeLibraryAndExitThread
 
 ```text
             on_input(InputEvent)          frame(&FrameInfo, &mut DrawData)        capture()
- WndProc ───────────────────────► Бэкенд ─────────────────────────────► Рендерер  ───► блокировка ввода
+    ввод ───────────────────────► Бэкенд ─────────────────────────────► Рендерер  ───► блокировка ввода
 ```
 
 ```rust
@@ -289,7 +292,8 @@ Overlay::builder().backend(|| MyBackend { /* ... */ }).install()?;
 - Оверлеи Steam, Discord и RTSS, которые сами перехватывают `Present`, обычно уживаются с overhook: MinHook выстраивает перехватчики цепочкой.
 - Если у игры несколько swap chain, оверлей рисует на той, что сейчас выводит кадры. На другую он переключается только после 500 мс тишины текущей.
 - Не получится рисовать в DX12-играх, которые выводят кадр через очередь, не известную DXGI, и при этом никогда не отправляют команды в DIRECT-очередь.
-- Камеры, работающие только на raw input, не блокируются через WndProc, если не включить `InputBlocking::WhenVisible` (он отбрасывает и `WM_INPUT`).
+- В режиме `WhenVisible` raw input мыши процесса на время открытого меню перенаправляется в overhook, а при закрытии/выгрузке регистрация игры восстанавливается.
+- Если UWP-игра выводит кадры не из потока, которому принадлежит её `CoreWindow`, вызывайте `overhook::input::poll_core_keys()` из хука в UI-потоке игры.
 - UWP-играм (например, Minecraft Bedrock) перед внедрением нужно дать DLL права на чтение для `ALL APPLICATION PACKAGES`.
 
 ## Планы

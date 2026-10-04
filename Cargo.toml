@@ -55,8 +55,11 @@ features = [
     "Win32_System_WinRT",
     "Win32_System_Ole",
     "Win32_UI_HiDpi",
+    "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    "System",
+    "UI_Core",
 ]
 
 [[example]]

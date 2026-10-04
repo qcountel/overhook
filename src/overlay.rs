@@ -129,8 +129,9 @@ impl OverlayBuilder {
         let result = (|| {
             let targets = crate::hooks::dxgi::discover(self.dx11, self.dx12)?;
             input::configure(self.blocking, self.toggle_key);
-            if let Some(vk) = self.toggle_key {
-                crate::hotkey::start(vk);
+            input::start();
+            if self.visible {
+                input::on_visibility(true);
             }
             VISIBLE.store(self.visible, Ordering::Release);
             *STATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(RenderThreadOnly(State {
@@ -155,7 +156,7 @@ impl OverlayBuilder {
         })();
         if let Err(e) = &result {
             log::error!("overhook: install failed: {e}");
-            crate::hotkey::stop();
+            input::stop();
             crate::hooks::unhook_all();
             *STATE.lock().unwrap_or_else(|e| e.into_inner()) = None;
             INSTALLED.store(false, Ordering::Release);
@@ -223,9 +224,8 @@ pub fn is_visible() -> bool {
 
 /// Shows / hides the overlay.
 pub fn set_visible(visible: bool) {
-    VISIBLE.store(visible, Ordering::Release);
-    if !visible {
-        input::set_capture(false, false);
+    if VISIBLE.swap(visible, Ordering::AcqRel) != visible && INSTALLED.load(Ordering::Acquire) {
+        input::on_visibility(visible);
     }
 }
 
@@ -250,11 +250,11 @@ pub fn eject() {
     if !INSTALLED.load(Ordering::Acquire) {
         return;
     }
-    crate::hotkey::stop();
     set_visible(false);
+    // hooks, raw input and the system cursor are restored before unloading
+    input::stop();
     crate::hooks::unhook_all();
-    input::detach();
-    // no thread can enter Present/WndProc detours any more
+    // no thread can enter the Present detours any more
     let state = STATE.lock().unwrap_or_else(|e| e.into_inner()).take();
     drop(state);
     #[cfg(feature = "dx12")]
@@ -307,11 +307,13 @@ fn present_inner(raw: *mut c_void) {
         st.renderer_failed = false;
         st.hwnd = swap_chain_window(swap_chain);
         if st.hwnd.0.is_null() {
-            log::warn!("overhook: could not find the game window; mouse/keyboard input disabled");
+            log::debug!("overhook: swap chain has no window; searching the process windows");
         }
     }
     st.last_present = Instant::now();
-    input::attach(st.hwnd);
+    input::set_game_window(st.hwnd);
+    // UWP keyboard state is only readable on the game's UI thread
+    input::poll_core_keys();
 
     let visible = VISIBLE.load(Ordering::Acquire);
     if visible != st.was_visible {
@@ -362,7 +364,8 @@ fn present_inner(raw: *mut c_void) {
     // input: client coordinates -> back-buffer pixels
     st.events.clear();
     input::drain(&mut st.events);
-    let (sx, sy) = client_scale(st.hwnd, bw, bh);
+    let hwnd = input::game_window();
+    let (sx, sy) = client_scale(hwnd, bw, bh);
     for ev in &st.events {
         let ev = match *ev {
             InputEvent::MouseMove { x, y } => InputEvent::MouseMove { x: x * sx, y: y * sy },
@@ -376,9 +379,10 @@ fn present_inner(raw: *mut c_void) {
         size: [bw, bh],
         delta: now - st.last_frame,
         time: now - st.start,
-        dpi_scale: dpi_scale(st.hwnd),
+        dpi_scale: dpi_scale(hwnd),
         focused: input::focused(),
-        software_cursor: st.software_cursor,
+        // modal mode hides the frozen system cursor: the UI must draw one
+        software_cursor: st.software_cursor || input::modal(),
     };
     st.last_frame = now;
 
@@ -470,6 +474,6 @@ fn dpi_scale(hwnd: HWND) -> f32 {
 }
 
 #[allow(dead_code)]
-pub(crate) fn subclassed() -> HWND {
-    input::subclassed_window()
+pub(crate) fn game_window() -> HWND {
+    input::game_window()
 }

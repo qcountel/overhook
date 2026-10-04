@@ -45,8 +45,7 @@ impl overhook::backends::egui::EguiApp for Menu {
 fn main_thread(module: overhook::util::Module) {
     if let Err(e) = Overlay::builder()
         .toggle_key(vk::INSERT)
-        .software_cursor(true)
-        .input_blocking(InputBlocking::WhenWanted)
+        .input_blocking(InputBlocking::WhenVisible)
         .egui(Menu::default())
         .install()
     {
@@ -56,16 +55,11 @@ fn main_thread(module: overhook::util::Module) {
     // END: eject and unload
     loop {
         std::thread::sleep(std::time::Duration::from_millis(50));
-        if unsafe { GetAsyncKeyState(vk::END as i32) } as u16 & 0x8000 != 0 {
+        if overhook::input::is_key_down(vk::END) {
             break;
         }
     }
     overhook::util::eject_and_unload(module.0);
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn GetAsyncKeyState(vk: i32) -> i16;
 }
 
 overhook::entry!(main_thread);

@@ -28,16 +28,11 @@ fn main_thread(module: overhook::util::Module) {
     }
     loop {
         std::thread::sleep(std::time::Duration::from_millis(50));
-        if unsafe { GetAsyncKeyState(vk::END as i32) } as u16 & 0x8000 != 0 {
+        if overhook::input::is_key_down(vk::END) {
             break;
         }
     }
     overhook::util::eject_and_unload(module.0);
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn GetAsyncKeyState(vk: i32) -> i16;
 }
 
 overhook::entry!(main_thread);
