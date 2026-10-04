@@ -1,0 +1,73 @@
+[package]
+name = "overhook"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Render hook for DirectX 11 / DirectX 12 games with a pluggable UI layer (egui, Dear ImGui, or your own)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/qcountel/overhook"
+documentation = "https://docs.rs/overhook"
+readme = "README.md"
+keywords = ["overlay", "hook", "directx", "egui", "imgui"]
+categories = ["gui", "rendering", "game-development", "os::windows-apis"]
+exclude = [".github"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "i686-pc-windows-msvc"]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["dx11", "dx12", "egui"]
+## DirectX 11 renderer
+dx11 = []
+## DirectX 12 renderer (+ ID3D12CommandQueue::ExecuteCommandLists hook)
+dx12 = []
+## egui UI backend
+egui = ["dep:egui"]
+## Dear ImGui UI backend (imgui-rs)
+imgui = ["dep:imgui"]
+
+[dependencies]
+log = "0.4"
+minhook = "0.9"
+egui = { version = "0.35", optional = true, default-features = false, features = ["default_fonts"] }
+imgui = { version = "0.12", optional = true }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[[example]]
+name = "egui_overlay"
+crate-type = ["cdylib"]
+required-features = ["egui"]
+
+[[example]]
+name = "imgui_overlay"
+crate-type = ["cdylib"]
+required-features = ["imgui"]
+
+[profile.release]
+lto = true
+codegen-units = 1

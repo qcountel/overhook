@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "--all-features"
+          - "--no-default-features --features dx11,egui"
+          - "--no-default-features --features dx12,egui"
+          - "--no-default-features --features dx11,dx12,imgui"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --lib ${{ matrix.features }} -- -D warnings
+      - run: cargo test --lib ${{ matrix.features }}
+
+  examples:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --all-features --examples
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-dlls
+          path: target/release/examples/*.dll
+
+  docs:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
