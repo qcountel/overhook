@@ -197,10 +197,10 @@ impl<A: EguiApp> UiBackend for EguiBackend<A> {
 
         self.ctx.begin_pass(raw);
         self.app.ui(&self.ctx);
-        if info.software_cursor {
-            if let Some(p) = self.ctx.pointer_latest_pos() {
-                draw_cursor(&self.ctx, p);
-            }
+        if info.software_cursor
+            && let Some(p) = self.ctx.pointer_latest_pos()
+        {
+            draw_cursor(&self.ctx, p);
         }
         let output = self.ctx.end_pass();
 

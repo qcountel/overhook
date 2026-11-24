@@ -50,11 +50,11 @@ pub(crate) fn observe_queue(raw: *mut c_void) {
     if desc.Type != D3D12_COMMAND_LIST_TYPE_DIRECT {
         return;
     }
-    if let Ok(mut q) = DIRECT_QUEUE.try_lock() {
-        if q.as_ref().map(|q| q.as_raw()) != Some(raw) {
-            log::debug!("overhook/dx12: direct queue {raw:?}");
-            *q = Some(queue.clone());
-        }
+    if let Ok(mut q) = DIRECT_QUEUE.try_lock()
+        && q.as_ref().map(|q| q.as_raw()) != Some(raw)
+    {
+        log::debug!("overhook/dx12: direct queue {raw:?}");
+        *q = Some(queue.clone());
     }
 }
 
@@ -63,33 +63,31 @@ pub(crate) fn forget_queue() {
     *DIRECT_QUEUE.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+pub(crate) fn create_direct_queue(device: &ID3D12Device) -> windows::core::Result<ID3D12CommandQueue> {
+    unsafe {
+        device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            ..Default::default()
+        })
+    }
+}
+
 /// Throw-away device, queue and swap chain used to read the vtables.
-pub(crate) fn dummy_objects(hwnd: HWND) -> Result<(IDXGISwapChain, ID3D12CommandQueue)> {
+pub(crate) fn dummy_objects(hwnd: Option<HWND>) -> Result<(IDXGISwapChain, ID3D12CommandQueue)> {
     unsafe {
         let mut device: Option<ID3D12Device> = None;
         D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device)?;
         let device = device.ok_or(Error::NoGraphicsApi)?;
-        let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            ..Default::default()
-        })?;
+        let queue = create_direct_queue(&device)?;
         let factory: IDXGIFactory2 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
-        let sc = factory.CreateSwapChainForHwnd(
-            &queue,
-            hwnd,
-            &DXGI_SWAP_CHAIN_DESC1 {
-                Width: 64,
-                Height: 64,
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                BufferCount: 2,
-                SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                ..Default::default()
-            },
-            None,
-            None,
-        )?;
+        let mut desc = super::composition_desc();
+        let sc = match hwnd {
+            Some(hwnd) => {
+                desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+                factory.CreateSwapChainForHwnd(&queue, hwnd, &desc, None, None)?
+            }
+            None => factory.CreateSwapChainForComposition(&queue, &desc, None)?,
+        };
         Ok((sc.cast()?, queue))
     }
 }

@@ -1453,7 +1453,7 @@ fn raw_tick() {
     } else if active {
         // the game may register again (focus change...): take it back, ~250 ms
         static N: AtomicU32 = AtomicU32::new(0);
-        if N.fetch_add(1, Ordering::Relaxed) % 25 != 0 {
+        if !N.fetch_add(1, Ordering::Relaxed).is_multiple_of(25) {
             return;
         }
         let ours = RAW_HWND.load(Ordering::Acquire);

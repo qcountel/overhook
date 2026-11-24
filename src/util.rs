@@ -8,6 +8,7 @@ use windows::Win32::Foundation::HMODULE;
 /// this function does not return.
 pub fn eject_and_unload(module: HMODULE) -> ! {
     crate::eject();
+    minhook::MinHook::uninitialize();
     unsafe { windows::Win32::System::LibraryLoader::FreeLibraryAndExitThread(module, 0) }
 }
 

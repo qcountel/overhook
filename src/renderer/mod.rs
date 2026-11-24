@@ -10,7 +10,24 @@ use crate::draw::DrawData;
 use crate::error::Result;
 use crate::overlay::GraphicsApi;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::Win32::Graphics::Dxgi::{
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    IDXGISwapChain,
+};
+
+pub(crate) fn composition_desc() -> DXGI_SWAP_CHAIN_DESC1 {
+    DXGI_SWAP_CHAIN_DESC1 {
+        Width: 64,
+        Height: 64,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        BufferCount: 2,
+        Scaling: DXGI_SCALING_STRETCH,
+        SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        ..Default::default()
+    }
+}
 
 pub(crate) trait Renderer {
     /// Draws `data` on top of the current back buffer.
@@ -25,16 +42,16 @@ pub(crate) trait Renderer {
 pub(crate) fn create(swap_chain: &IDXGISwapChain, allowed: (bool, bool)) -> Result<Option<Box<dyn Renderer>>> {
     let _ = allowed;
     #[cfg(feature = "dx12")]
-    if allowed.1 {
-        if let Ok(device) = unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D12::ID3D12Device>() } {
-            return Ok(dx12::Dx12Renderer::new(device, swap_chain)?.map(|r| Box::new(r) as Box<dyn Renderer>));
-        }
+    if allowed.1
+        && let Ok(device) = unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D12::ID3D12Device>() }
+    {
+        return Ok(dx12::Dx12Renderer::new(device, swap_chain)?.map(|r| Box::new(r) as Box<dyn Renderer>));
     }
     #[cfg(feature = "dx11")]
-    if allowed.0 {
-        if let Ok(device) = unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D11::ID3D11Device>() } {
-            return Ok(Some(Box::new(dx11::Dx11Renderer::new(device)?)));
-        }
+    if allowed.0
+        && let Ok(device) = unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D11::ID3D11Device>() }
+    {
+        return Ok(Some(Box::new(dx11::Dx11Renderer::new(device)?)));
     }
     Ok(None)
 }

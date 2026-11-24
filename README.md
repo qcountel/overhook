@@ -11,6 +11,9 @@ In-process **render hook for DirectX 11 and DirectX 12** games with a
 [Dear ImGui](https://github.com/imgui-rs/imgui-rs) backends; any other UI
 library plugs in through one small trait.
 
+Overhook works at the DXGI swap-chain level across Windows applications using
+Direct3D 11 or 12. The mod supplies the menu and any game-specific behavior.
+
 Inspired by [hudhook](https://github.com/veeenu/hudhook), with a different split:
 the graphics API is detected automatically, and UI libraries never touch Direct3D.
 
@@ -92,9 +95,32 @@ overhook::eject();                   // remove everything; then unload
 overhook::util::eject_and_unload(module); // eject + FreeLibraryAndExitThread
 ```
 
+If the mod locates the swap chain itself, pass a live `&IDXGISwapChain` to
+`.install_for_swap_chain(&swap_chain)` in place of `.install()`. Overhook reads
+the DXGI method addresses from that object and draws only on that swap chain.
+Call `eject()` before replacing the swap chain, then install with the new one.
+
 egui apps implement `EguiApp` (`ui(&mut self, &egui::Context)`, plus an optional `setup`), or
 pass a closure. imgui apps implement `ImguiApp` (`render(&mut self, &imgui::Ui)`, plus an optional `setup`), or
 pass a closure. See [`examples/`](examples).
+
+### Standalone DX11 and DX12 examples
+
+```powershell
+cargo run --example dx11_window
+cargo run --example dx12_window
+```
+
+Both examples open their own Win32 window, use the WARP software adapter and
+attach egui to their swap chain with `install_for_swap_chain`. Insert toggles the
+menu. Closing the window calls `eject()` before releasing the graphics objects.
+Add `-- --smoke-test` to run eight frames in a hidden window and check the detected API.
+
+- [DX11](examples/dx11_window.rs) clears a render target and then calls `Present`.
+- [DX12](examples/dx12_window.rs) creates the swap chain with a DIRECT queue,
+  submits the clear on that queue, transitions the buffer back to `PRESENT` and
+  calls `Present`. It waits for a fence before reusing its demo command allocator.
+  [Microsoft's fence documentation](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-seteventoncompletion)
 
 ## Adding another UI library
 
@@ -162,6 +188,9 @@ MIT or Apache-2.0, at your option.
 UI подключается как модуль: из коробки есть бэкенды [egui](https://github.com/emilk/egui) и
 [Dear ImGui](https://github.com/imgui-rs/imgui-rs), а любую другую UI-библиотеку можно подключить
 через один небольшой трейт.
+
+Overhook работает на уровне DXGI swap chain в приложениях Windows на
+Direct3D 11 или 12. Меню и логику конкретной игры задаёт мод.
 
 Идея взята из [hudhook](https://github.com/veeenu/hudhook), но устроено иначе:
 графический API определяется автоматически, а UI-библиотеки никогда не работают с Direct3D напрямую.
@@ -244,9 +273,34 @@ overhook::eject();                   // снять всё; после этого
 overhook::util::eject_and_unload(module); // eject + FreeLibraryAndExitThread
 ```
 
+Если мод сам находит swap chain, передайте живой `&IDXGISwapChain` через
+`.install_for_swap_chain(&swap_chain)` вместо `.install()`. Overhook возьмёт
+адреса DXGI-методов из этого объекта и будет рисовать только на нём.
+Перед заменой swap chain вызовите `eject()`, затем подключите новый объект.
+
 Приложение на egui реализует `EguiApp` (`ui(&mut self, &egui::Context)` и необязательный `setup`)
 или передаётся замыканием. Приложение на imgui реализует `ImguiApp` (`render(&mut self, &imgui::Ui)` и необязательный
 `setup`) или тоже передаётся замыканием. Примеры — в [`examples/`](examples).
+
+### Самостоятельные примеры DX11 и DX12
+
+```powershell
+cargo run --example dx11_window
+cargo run --example dx12_window
+```
+
+Оба примера создают своё Win32-окно, используют программный адаптер WARP и
+подключают egui к своей swap chain через `install_for_swap_chain`. Insert
+показывает и скрывает меню. При закрытии окна примеры вызывают `eject()`
+перед освобождением графических объектов. Параметр `-- --smoke-test` запускает
+восемь кадров в скрытом окне и проверяет определённый графический API.
+
+- [DX11](examples/dx11_window.rs) очищает буфер кадра и вызывает `Present`.
+- [DX12](examples/dx12_window.rs) создаёт swap chain с очередью DIRECT,
+  отправляет очистку в эту очередь, возвращает буфер в состояние `PRESENT` и
+  вызывает `Present`. Перед повторным использованием аллокатора команд пример
+  дожидается fence.
+  [Документация Microsoft по fence](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-seteventoncompletion)
 
 ## Как добавить другую UI-библиотеку
 

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
-use windows::core::Interface;
+use windows::core::{IUnknown, Interface};
 
 /// Graphics API the overlay is currently drawing with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,12 +122,28 @@ impl OverlayBuilder {
     /// Hooks the game. Call it from your own thread, **not** from `DllMain`
     /// (see [`crate::entry!`]).
     pub fn install(self) -> Result<()> {
+        self.install_inner(None)
+    }
+
+    /// Hooks an existing DXGI swap chain supplied by the caller and draws only on it.
+    /// Call outside `DllMain`. Call [`eject`] before replacing the swap chain.
+    pub fn install_for_swap_chain(self, swap_chain: &IDXGISwapChain) -> Result<()> {
+        self.install_inner(Some(swap_chain))
+    }
+
+    fn install_inner(self, swap_chain: Option<&IDXGISwapChain>) -> Result<()> {
         let factory = self.factory.ok_or(Error::NoBackend)?;
         if INSTALLED.swap(true, Ordering::AcqRel) {
             return Err(Error::AlreadyInstalled);
         }
         let result = (|| {
-            let targets = crate::hooks::dxgi::discover(self.dx11, self.dx12)?;
+            let (targets, target_swap_chain) = match swap_chain {
+                Some(swap_chain) => (
+                    crate::hooks::dxgi::from_swap_chain(swap_chain, self.dx11, self.dx12)?,
+                    Some(swap_chain.cast::<IUnknown>()?),
+                ),
+                None => (crate::hooks::dxgi::discover(self.dx11, self.dx12)?, None),
+            };
             input::configure(self.blocking, self.toggle_key);
             input::start();
             if self.visible {
@@ -139,6 +155,7 @@ impl OverlayBuilder {
                 backend: None,
                 renderer: None,
                 renderer_failed: false,
+                target_swap_chain,
                 swap_chain: 0,
                 last_present: Instant::now(),
                 hwnd: HWND::default(),
@@ -181,6 +198,7 @@ struct State {
     backend: Option<Box<dyn UiBackend>>,
     renderer: Option<Box<dyn Renderer>>,
     renderer_failed: bool,
+    target_swap_chain: Option<IUnknown>,
     swap_chain: usize,
     last_present: Instant,
     hwnd: HWND,
@@ -193,6 +211,18 @@ struct State {
     was_visible: bool,
     software_cursor: bool,
     apis: (bool, bool),
+}
+
+impl State {
+    fn swap_chain_key(&self, swap_chain: &IDXGISwapChain) -> Option<usize> {
+        let Some(target) = &self.target_swap_chain else {
+            return Some(swap_chain.as_raw() as usize);
+        };
+        if swap_chain.as_raw() != target.as_raw() && swap_chain.cast::<IUnknown>().ok()?.as_raw() != target.as_raw() {
+            return None;
+        }
+        Some(target.as_raw() as usize)
+    }
 }
 
 static STATE: Mutex<Option<RenderThreadOnly<State>>> = Mutex::new(None);
@@ -259,7 +289,6 @@ pub fn eject() {
     drop(state);
     #[cfg(feature = "dx12")]
     renderer::dx12::forget_queue();
-    minhook::MinHook::uninitialize();
     API.store(0, Ordering::Relaxed);
     INSTALLED.store(false, Ordering::Release);
     log::info!("overhook: ejected");
@@ -295,14 +324,17 @@ fn present_inner(raw: *mut c_void) {
     let Some(swap_chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&raw) }) else {
         return;
     };
+    let Some(swap_chain_key) = st.swap_chain_key(swap_chain) else {
+        return;
+    };
 
     // which swap chain do we draw on?
-    if st.swap_chain != raw as usize {
+    if st.swap_chain != swap_chain_key {
         if st.swap_chain != 0 && st.last_present.elapsed() < SWAP_CHAIN_STALE {
             return;
         }
         log::debug!("overhook: drawing on swap chain {raw:?}");
-        st.swap_chain = raw as usize;
+        st.swap_chain = swap_chain_key;
         st.renderer = None;
         st.renderer_failed = false;
         st.hwnd = swap_chain_window(swap_chain);
@@ -409,12 +441,12 @@ pub(crate) fn on_resize(raw: *mut c_void) {
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // blocking lock: the back buffers must be released before resizing
         let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(RenderThreadOnly(st)) = guard.as_mut() {
-            if st.swap_chain == raw as usize {
-                if let Some(r) = st.renderer.as_mut() {
-                    r.before_resize();
-                }
-            }
+        if let Some(RenderThreadOnly(st)) = guard.as_mut()
+            && let Some(swap_chain) = (unsafe { IDXGISwapChain::from_raw_borrowed(&raw) })
+            && st.swap_chain_key(swap_chain) == Some(st.swap_chain)
+            && let Some(r) = st.renderer.as_mut()
+        {
+            r.before_resize();
         }
     }));
     if r.is_err() {

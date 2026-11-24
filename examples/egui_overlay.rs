@@ -6,8 +6,34 @@
 //! ```
 //! INSERT shows / hides the menu, END ejects and unloads the DLL.
 
+use log::{LevelFilter, Log, Metadata, Record};
 use overhook::egui;
 use overhook::{InputBlocking, Overlay, vk};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::sync::Mutex;
+
+struct FileLogger(Mutex<File>);
+
+impl Log for FileLogger {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target().starts_with("overhook") || metadata.target() == "egui_overlay"
+    }
+
+    fn log(&self, record: &Record<'_>) {
+        if self.enabled(record.metadata())
+            && let Ok(mut file) = self.0.lock()
+        {
+            let _ = writeln!(file, "{} {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {
+        if let Ok(mut file) = self.0.lock() {
+            let _ = file.flush();
+        }
+    }
+}
 
 #[derive(Default)]
 struct Menu {
@@ -43,13 +69,20 @@ impl overhook::backends::egui::EguiApp for Menu {
 }
 
 fn main_thread(module: overhook::util::Module) {
+    let path = std::env::temp_dir().join("overhook-egui.log");
+    if let Ok(file) = OpenOptions::new().create(true).append(true).open(path)
+        && log::set_boxed_logger(Box::new(FileLogger(Mutex::new(file)))).is_ok()
+    {
+        log::set_max_level(LevelFilter::Debug);
+    }
+    log::info!("overhook egui starting (PID {})", std::process::id());
     if let Err(e) = Overlay::builder()
         .toggle_key(vk::INSERT)
         .input_blocking(InputBlocking::WhenVisible)
         .egui(Menu::default())
         .install()
     {
-        eprintln!("overhook: {e}");
+        log::error!("overhook: {e}");
         return;
     }
     // END: eject and unload

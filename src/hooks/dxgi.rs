@@ -1,8 +1,6 @@
 //! Locating and hooking `IDXGISwapChain::Present / Present1 / ResizeBuffers /
 //! ResizeBuffers1` and `ID3D12CommandQueue::ExecuteCommandLists`.
 //!
-//! The addresses are read from the vtables of throw-away objects created on a
-//! hidden window (DX11 device + swap chain, DX12 device + queue + swap chain).
 //! DX11 and DX12 swap chains may be implemented by different functions, so
 //! each detour is a const-generic function with its own trampoline slot.
 
@@ -126,11 +124,8 @@ pub(crate) fn install(targets: &Targets) -> Result<()> {
                         0 => $detour::<0> as *const () as usize,
                         _ => $detour::<1> as *const () as usize,
                     };
-                    match unsafe { super::hook($addr, d, $name) } {
-                        Ok(orig) => {
-                            $store[n].store(orig, Ordering::Release);
-                            true
-                        }
+                    match unsafe { super::hook($addr, d, &$store[n], $name) } {
+                        Ok(()) => true,
                         Err(e) => {
                             log::warn!("overhook: {e}");
                             false
@@ -152,10 +147,11 @@ pub(crate) fn install(targets: &Targets) -> Result<()> {
             super::hook(
                 targets.execute_command_lists,
                 execute_detour as *const () as usize,
+                &EXECUTE,
                 "ID3D12CommandQueue::ExecuteCommandLists",
             )
         } {
-            Ok(orig) => EXECUTE.store(orig, Ordering::Release),
+            Ok(()) => {}
             Err(e) => log::warn!("overhook: {e} - the DX12 renderer will not be available"),
         }
     }
@@ -237,9 +233,30 @@ fn fns_of(sc: &IDXGISwapChain) -> SwapChainFns {
     fns
 }
 
+pub(crate) fn from_swap_chain(swap_chain: &IDXGISwapChain, dx11: bool, dx12: bool) -> Result<Targets> {
+    #[cfg(feature = "dx12")]
+    if dx12 && let Ok(device) = unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D12::ID3D12Device>() }
+    {
+        let queue = unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D12::ID3D12CommandQueue>() }
+            .or_else(|_| crate::renderer::dx12::create_direct_queue(&device))?;
+        return Ok(Targets {
+            swap_chains: vec![fns_of(swap_chain)],
+            execute_command_lists: queue.vtable().ExecuteCommandLists as usize,
+        });
+    }
+    #[cfg(feature = "dx11")]
+    if dx11 && unsafe { swap_chain.GetDevice::<windows::Win32::Graphics::Direct3D11::ID3D11Device>() }.is_ok() {
+        return Ok(Targets {
+            swap_chains: vec![fns_of(swap_chain)],
+            ..Targets::default()
+        });
+    }
+    let _ = (dx11, dx12);
+    Err(Error::NoGraphicsApi)
+}
+
 /// Creates the throw-away objects and returns the function addresses.
 pub(crate) fn discover(dx11: bool, dx12: bool) -> Result<Targets> {
-    let window = DummyWindow::new()?;
     let mut targets = Targets::default();
     let mut push = |fns: SwapChainFns| {
         if !targets.swap_chains.contains(&fns) {
@@ -267,15 +284,29 @@ pub(crate) fn discover(dx11: bool, dx12: bool) -> Result<Targets> {
 
     #[cfg(feature = "dx11")]
     if dx11 {
-        match crate::renderer::dx11::dummy_swap_chain(window.hwnd) {
-            Ok(sc) => push(fns_of(&sc)),
+        let probe = crate::renderer::dx11::composition_swap_chain()
+            .map(|sc| fns_of(&sc))
+            .or_else(|error| {
+                log::debug!("overhook: DX11 composition probe failed: {error}");
+                let window = DummyWindow::new()?;
+                crate::renderer::dx11::dummy_swap_chain(window.hwnd).map(|sc| fns_of(&sc))
+            });
+        match probe {
+            Ok(fns) => push(fns),
             Err(e) => log::warn!("overhook: DX11 probe failed: {e}"),
         }
     }
     #[cfg(feature = "dx12")]
     if dx12 {
-        match crate::renderer::dx12::dummy_objects(window.hwnd) {
-            Ok((sc, queue)) => {
+        let probe = crate::renderer::dx12::dummy_objects(None)
+            .map(|(sc, queue)| (sc, queue, None))
+            .or_else(|error| {
+                log::debug!("overhook: DX12 composition probe failed: {error}");
+                let window = DummyWindow::new()?;
+                crate::renderer::dx12::dummy_objects(Some(window.hwnd)).map(|(sc, queue)| (sc, queue, Some(window)))
+            });
+        match probe {
+            Ok((sc, queue, _window)) => {
                 push(fns_of(&sc));
                 targets.execute_command_lists = queue.vtable().ExecuteCommandLists as usize;
             }
@@ -283,7 +314,6 @@ pub(crate) fn discover(dx11: bool, dx12: bool) -> Result<Targets> {
         }
     }
     let _ = (dx11, dx12);
-    drop(window);
     log::debug!("overhook: targets {targets:?}");
     if targets.swap_chains.is_empty() {
         Err(Error::NoGraphicsApi)

@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use minhook::MinHook;
 use std::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Targets of every hook installed by us.
@@ -30,8 +30,7 @@ impl Drop for InFlight {
     }
 }
 
-/// Hooks `target` with `detour`, returns the trampoline (the original).
-pub(crate) unsafe fn hook(target: usize, detour: usize, name: &str) -> Result<usize> {
+pub(crate) unsafe fn hook(target: usize, detour: usize, original: &AtomicUsize, name: &str) -> Result<()> {
     let mut targets = TARGETS.lock().unwrap_or_else(|e| e.into_inner());
     if targets.contains(&target) {
         return Err(Error::Hook(format!("{name}: {target:#x} is already hooked")));
@@ -39,13 +38,15 @@ pub(crate) unsafe fn hook(target: usize, detour: usize, name: &str) -> Result<us
     unsafe {
         let orig = MinHook::create_hook(target as *mut c_void, detour as *mut c_void)
             .map_err(|e| Error::Hook(format!("{name}: create {e:?}")))?;
+        original.store(orig as usize, Ordering::Release);
         if let Err(e) = MinHook::enable_hook(target as *mut c_void) {
+            original.store(0, Ordering::Release);
             let _ = MinHook::remove_hook(target as *mut c_void);
             return Err(Error::Hook(format!("{name}: enable {e:?}")));
         }
         targets.push(target);
         log::debug!("overhook: hooked {name} at {target:#x}");
-        Ok(orig as usize)
+        Ok(())
     }
 }
 
@@ -53,13 +54,13 @@ pub(crate) unsafe fn hook(target: usize, detour: usize, name: &str) -> Result<us
 /// detour any more.
 pub(crate) fn unhook_all() {
     let targets = std::mem::take(&mut *TARGETS.lock().unwrap_or_else(|e| e.into_inner()));
-    for t in targets {
-        unsafe {
-            let _ = MinHook::disable_hook(t as *mut c_void);
-            let _ = MinHook::remove_hook(t as *mut c_void);
-        }
+    for &t in &targets {
+        let _ = unsafe { MinHook::disable_hook(t as *mut c_void) };
     }
     wait_idle(Duration::from_secs(2));
+    for t in targets {
+        let _ = unsafe { MinHook::remove_hook(t as *mut c_void) };
+    }
 }
 
 pub(crate) fn wait_idle(timeout: Duration) {

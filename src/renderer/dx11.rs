@@ -15,7 +15,39 @@ use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::core::s;
+use windows::core::{Interface, s};
+
+pub(crate) fn composition_swap_chain() -> Result<IDXGISwapChain> {
+    let mut last = crate::Error::NoGraphicsApi;
+    for driver in [D3D_DRIVER_TYPE_WARP, D3D_DRIVER_TYPE_HARDWARE] {
+        let result = unsafe {
+            (|| {
+                let mut device: Option<ID3D11Device> = None;
+                D3D11CreateDevice(
+                    None::<&IDXGIAdapter>,
+                    driver,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    None,
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    None,
+                )?;
+                let device = device.ok_or(crate::Error::NoGraphicsApi)?;
+                let dxgi_device: IDXGIDevice = device.cast()?;
+                let factory: IDXGIFactory2 = dxgi_device.GetAdapter()?.GetParent()?;
+                let swap_chain = factory.CreateSwapChainForComposition(&device, &super::composition_desc(), None)?;
+                Ok(swap_chain.cast()?)
+            })()
+        };
+        match result {
+            Ok(swap_chain) => return Ok(swap_chain),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
+}
 
 /// Throw-away device + swap chain used to read the DXGI vtable.
 pub(crate) fn dummy_swap_chain(hwnd: HWND) -> Result<IDXGISwapChain> {
