@@ -56,6 +56,7 @@ impl<A: EguiApp> EguiBackend<A> {
     /// Creates the backend (called on the render thread by the builder).
     pub fn new(mut app: A) -> Self {
         let ctx = Context::default();
+        ctx.all_styles_mut(|style| style.interaction.selectable_labels = false);
         app.setup(&ctx);
         Self {
             ctx,

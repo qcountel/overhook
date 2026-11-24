@@ -17,7 +17,9 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{Interface, s};
 
-pub(crate) fn composition_swap_chain() -> Result<IDXGISwapChain> {
+pub(crate) fn composition_swap_chain(swap_effect: DXGI_SWAP_EFFECT) -> Result<IDXGISwapChain> {
+    let mut desc = super::composition_desc();
+    desc.SwapEffect = swap_effect;
     let mut last = crate::Error::NoGraphicsApi;
     for driver in [D3D_DRIVER_TYPE_WARP, D3D_DRIVER_TYPE_HARDWARE] {
         let result = unsafe {
@@ -37,7 +39,7 @@ pub(crate) fn composition_swap_chain() -> Result<IDXGISwapChain> {
                 let device = device.ok_or(crate::Error::NoGraphicsApi)?;
                 let dxgi_device: IDXGIDevice = device.cast()?;
                 let factory: IDXGIFactory2 = dxgi_device.GetAdapter()?.GetParent()?;
-                let swap_chain = factory.CreateSwapChainForComposition(&device, &super::composition_desc(), None)?;
+                let swap_chain = factory.CreateSwapChainForComposition(&device, &desc, None)?;
                 Ok(swap_chain.cast()?)
             })()
         };
@@ -61,11 +63,11 @@ pub(crate) fn dummy_swap_chain(hwnd: HWND) -> Result<IDXGISwapChain> {
         BufferCount: 2,
         OutputWindow: hwnd,
         Windowed: true.into(),
-        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
         ..Default::default()
     };
     let mut last = None;
-    for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
+    for driver in [D3D_DRIVER_TYPE_WARP, D3D_DRIVER_TYPE_HARDWARE] {
         let mut sc = None;
         let r = unsafe {
             D3D11CreateDeviceAndSwapChain(

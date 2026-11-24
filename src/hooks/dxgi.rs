@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HRESULT, Interface, PCWSTR, w};
 
-const SLOTS: usize = 2;
+const SLOTS: usize = 4;
 static PRESENT: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
 static PRESENT1: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
 static RESIZE: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
@@ -120,10 +120,8 @@ pub(crate) fn install(targets: &Targets) -> Result<()> {
         macro_rules! slot {
             ($addr:expr, $store:ident, $detour:ident, $name:literal) => {
                 if $addr != 0 {
-                    let d = match n {
-                        0 => $detour::<0> as *const () as usize,
-                        _ => $detour::<1> as *const () as usize,
-                    };
+                    let detours = [$detour::<0>, $detour::<1>, $detour::<2>, $detour::<3>];
+                    let d = detours[n] as *const () as usize;
                     match unsafe { super::hook($addr, d, &$store[n], $name) } {
                         Ok(()) => true,
                         Err(e) => {
@@ -284,16 +282,24 @@ pub(crate) fn discover(dx11: bool, dx12: bool) -> Result<Targets> {
 
     #[cfg(feature = "dx11")]
     if dx11 {
-        let probe = crate::renderer::dx11::composition_swap_chain()
-            .map(|sc| fns_of(&sc))
-            .or_else(|error| {
-                log::debug!("overhook: DX11 composition probe failed: {error}");
-                let window = DummyWindow::new()?;
-                crate::renderer::dx11::dummy_swap_chain(window.hwnd).map(|sc| fns_of(&sc))
-            });
-        match probe {
-            Ok(fns) => push(fns),
-            Err(e) => log::warn!("overhook: DX11 probe failed: {e}"),
+        for swap_effect in [DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL] {
+            match crate::renderer::dx11::composition_swap_chain(swap_effect) {
+                Ok(sc) => {
+                    let fns = fns_of(&sc);
+                    log::debug!("overhook: DX11 composition probe ({swap_effect:?}): {fns:?}");
+                    push(fns);
+                }
+                Err(e) => log::debug!("overhook: DX11 composition probe ({swap_effect:?}) failed: {e}"),
+            }
+        }
+        match DummyWindow::new()
+            .and_then(|window| crate::renderer::dx11::dummy_swap_chain(window.hwnd).map(|sc| fns_of(&sc)))
+        {
+            Ok(fns) => {
+                log::debug!("overhook: DX11 HWND probe: {fns:?}");
+                push(fns);
+            }
+            Err(e) => log::debug!("overhook: DX11 HWND probe failed: {e}"),
         }
     }
     #[cfg(feature = "dx12")]

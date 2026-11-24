@@ -146,9 +146,6 @@ impl OverlayBuilder {
             };
             input::configure(self.blocking, self.toggle_key);
             input::start();
-            if self.visible {
-                input::on_visibility(true);
-            }
             VISIBLE.store(self.visible, Ordering::Release);
             *STATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(RenderThreadOnly(State {
                 factory: Some(factory),
@@ -228,6 +225,7 @@ impl State {
 static STATE: Mutex<Option<RenderThreadOnly<State>>> = Mutex::new(None);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static VISIBLE: AtomicBool = AtomicBool::new(true);
+static FRAME_READY: AtomicBool = AtomicBool::new(false);
 static API: AtomicU8 = AtomicU8::new(0);
 
 /// A different swap chain is only adopted after the current one has not
@@ -239,7 +237,13 @@ thread_local! {
 }
 
 pub(crate) fn visible_fast() -> bool {
-    VISIBLE.load(Ordering::Relaxed) && INSTALLED.load(Ordering::Relaxed)
+    VISIBLE.load(Ordering::Relaxed) && FRAME_READY.load(Ordering::Acquire) && INSTALLED.load(Ordering::Relaxed)
+}
+
+fn set_frame_ready(ready: bool) {
+    if FRAME_READY.swap(ready, Ordering::AcqRel) != ready {
+        input::on_visibility(ready);
+    }
 }
 
 /// Whether the overlay is installed.
@@ -254,14 +258,16 @@ pub fn is_visible() -> bool {
 
 /// Shows / hides the overlay.
 pub fn set_visible(visible: bool) {
-    if VISIBLE.swap(visible, Ordering::AcqRel) != visible && INSTALLED.load(Ordering::Acquire) {
-        input::on_visibility(visible);
+    if VISIBLE.swap(visible, Ordering::AcqRel) != visible && !visible {
+        set_frame_ready(false);
     }
 }
 
 /// Flips visibility.
 pub fn toggle() {
-    set_visible(!is_visible());
+    let visible = !is_visible();
+    set_visible(visible);
+    log::debug!("overhook: menu visibility requested: {visible}");
 }
 
 /// The graphics API in use, once the first frame was drawn.
@@ -334,6 +340,7 @@ fn present_inner(raw: *mut c_void) {
             return;
         }
         log::debug!("overhook: drawing on swap chain {raw:?}");
+        set_frame_ready(false);
         st.swap_chain = swap_chain_key;
         st.renderer = None;
         st.renderer_failed = false;
@@ -430,9 +437,13 @@ fn present_inner(raw: *mut c_void) {
         st.replay = false;
     }
 
-    if let Err(e) = renderer.render(swap_chain, &st.draw) {
-        log::error!("overhook: render failed, renderer will be re-created: {e}");
-        st.renderer = None;
+    match renderer.render(swap_chain, &st.draw) {
+        Ok(()) => set_frame_ready(is_visible() && !st.draw.cmds.is_empty()),
+        Err(e) => {
+            log::error!("overhook: render failed, renderer will be re-created: {e}");
+            set_frame_ready(false);
+            st.renderer = None;
+        }
     }
 }
 
